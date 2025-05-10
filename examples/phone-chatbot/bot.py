@@ -9,6 +9,7 @@ import io
 import os
 import sys
 import wave
+import time
 
 import aiofiles
 from dotenv import load_dotenv
@@ -30,6 +31,25 @@ from pipecat.transports.network.fastapi_websocket import (
     FastAPIWebsocketTransport,
 )
 
+MAX_SILENCE_PROMPTS = 3
+SILENCE_TIMEOUT = 10  # seconds
+
+class CallSession:
+    def __init__(self):
+        self.start_time = datetime.now()
+        self.silence_events = 0
+        self.unanswered_prompts = 0
+
+    def get_summary(self):
+        duration = (datetime.now() - self.start_time).total_seconds()
+        return {
+            "duration_seconds": duration,
+            "silence_events": self.silence_events,
+            "unanswered_prompts": self.unanswered_prompts,
+        }
+
+
+call_sessions = {}
 load_dotenv(override=True)
 
 logger.remove(0)
@@ -119,18 +139,38 @@ async def run_bot(websocket_client: WebSocket, stream_sid: str, call_sid: str, t
         ),
     )
 
+    async def detect_silence(timeout):
+        # Replace with actual VAD/audio check logic
+        await asyncio.sleep(timeout)
+        return True  # Simulate silence
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
+        session = CallSession()
+        call_sessions[client.id] = session
+
         # Start recording.
         await audiobuffer.start_recording()
         # Kick off the conversation.
         messages.append({"role": "system", "content": "Please introduce yourself to the user."})
         await task.queue_frames([context_aggregator.user().get_context_frame()])
-        
-        
+        # Add silence detection that plays a TTS prompt after 10+ seconds of silence 
+        while session.unanswered_prompts < MAX_SILENCE_PROMPTS:
+            silence = await detect_silence(SILENCE_TIMEOUT)
+        if silence:
+            session.silence_events += 1
+            session.unanswered_prompts += 1
+            await tts.run_tts("Are you still there?")
+        else:
+            session.unanswered_prompts = 0  # Reset on speech
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
+        session = CallSession()
+        call_sessions[client.id] = session
+         # Post-call summary
+        summary = session.get_summary()
+        # print(f"Call Summary for {call_id}: {summary}")
         await task.cancel()
 
     @audiobuffer.event_handler("on_audio_data")

@@ -3,8 +3,12 @@ import json
 import os
 import shlex
 import subprocess
+from bot import run_bot
 from contextlib import asynccontextmanager
 from typing import Any, Dict
+from starlette.responses import HTMLResponse
+from typing import Optional
+from fastapi import FastAPI, WebSocket
 
 import aiohttp
 from bot_constants import (
@@ -152,13 +156,40 @@ app.add_middleware(
 
 # ----------------- API Endpoints ----------------- #
 
+@app.post("/")
+async def start_call():
+    print("STREAMING")
+    return HTMLResponse(
+        content=open("templates/streams.xml").read(),
+        media_type="application/xml"
+    )
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    print("ACCEPTING WEBSOCKET")
+
+    # Read initial WebSocket messages
+    start_data = websocket.iter_text()
+    await start_data.__anext__()
+
+    # Second message contains the call details
+    call_data = json.loads(await start_data.__anext__())
+
+    # Extract both StreamSid and CallSid
+    stream_sid = call_data["start"]["streamSid"]
+    call_sid = call_data["start"]["callSid"]
+
+    # Run your Pipecat bot
+    await run_bot(websocket, stream_sid, call_sid, app.state.testing)
+
 
 @app.post("/start")
 async def handle_start_request(request: Request) -> JSONResponse:
     """Unified endpoint to handle bot configuration for different scenarios."""
     # Get default room URL from environment
     room_url = os.getenv("DAILY_SAMPLE_ROOM_URL", None)
-
+    print(room_url)
     try:
         data = await request.json()
 
@@ -219,6 +250,7 @@ async def handle_start_request(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid JSON in request body")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Request processing error: {str(e)}")
+
 
 
 # ----------------- Main ----------------- #
